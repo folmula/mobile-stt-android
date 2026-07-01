@@ -39,6 +39,7 @@ public class SafeActivity extends Activity {
     private Button pickAudioButton;
     private Button pickModelButton;
     private Button copyButton;
+    private Button nativeCheckButton;
     private Button saveTxtButton;
 
     private Uri selectedAudioUri;
@@ -53,13 +54,20 @@ public class SafeActivity extends Activity {
     private File copiedAudioFile;
     private File copiedModelFile;
 
+    private boolean nativeLoadTried = false;
+    private boolean nativeLibraryLoaded = false;
+    private String nativeLoadError = "";
+    private String lastNativeCheckResult = "아직 실행하지 않음";
+
+    private native String nativeCheck();
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         try {
             buildUi();
-        } catch (Exception e) {
+        } catch (Throwable e) {
             showFatalError(e);
         }
     }
@@ -78,12 +86,12 @@ public class SafeActivity extends Activity {
 
         statusText = new TextView(this);
         statusText.setText(
-                "3단계 테스트입니다.\n\n" +
+                "4단계 테스트입니다.\n\n" +
                 "1. WAV 오디오 파일을 선택합니다.\n" +
                 "2. Whisper 모델 파일을 선택합니다.\n" +
                 "3. 두 파일을 앱 내부 저장소로 복사합니다.\n" +
-                "4. 복사 결과를 TXT로 저장합니다.\n\n" +
-                "아직 STT 변환은 하지 않습니다."
+                "4. whisper.cpp 네이티브 연결을 확인합니다.\n\n" +
+                "아직 실제 STT 변환은 하지 않습니다."
         );
         statusText.setTextSize(16f);
         statusText.setPadding(0, dp(20), 0, dp(16));
@@ -109,7 +117,7 @@ public class SafeActivity extends Activity {
         pickAudioButton.setOnClickListener(v -> {
             try {
                 openAudioPicker();
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 showError("오디오 선택 화면 열기 실패", e);
             }
         });
@@ -120,7 +128,7 @@ public class SafeActivity extends Activity {
         pickModelButton.setOnClickListener(v -> {
             try {
                 openModelPicker();
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 showError("모델 선택 화면 열기 실패", e);
             }
         });
@@ -131,14 +139,19 @@ public class SafeActivity extends Activity {
         copyButton.setEnabled(false);
         copyButton.setOnClickListener(v -> copySelectedFiles());
 
+        nativeCheckButton = new Button(this);
+        nativeCheckButton.setText("4. whisper.cpp 네이티브 연결 확인");
+        nativeCheckButton.setAllCaps(false);
+        nativeCheckButton.setOnClickListener(v -> runNativeCheck());
+
         saveTxtButton = new Button(this);
-        saveTxtButton.setText("4. 복사 결과 TXT 저장");
+        saveTxtButton.setText("5. 복사 결과 TXT 저장");
         saveTxtButton.setAllCaps(false);
         saveTxtButton.setEnabled(false);
         saveTxtButton.setOnClickListener(v -> {
             try {
                 openTxtCreator();
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 showError("TXT 저장 화면 열기 실패", e);
             }
         });
@@ -151,6 +164,7 @@ public class SafeActivity extends Activity {
         addView(root, pickAudioButton);
         addView(root, pickModelButton);
         addView(root, copyButton);
+        addView(root, nativeCheckButton);
         addView(root, saveTxtButton);
 
         scrollView.addView(root);
@@ -190,8 +204,6 @@ public class SafeActivity extends Activity {
     private void openModelPicker() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-
-        // ggml, bin, gguf 파일은 기기마다 MIME 타입이 다르게 나올 수 있어서 전체 파일로 엽니다.
         intent.setType("*/*");
 
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -205,7 +217,7 @@ public class SafeActivity extends Activity {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("text/plain");
 
-        String fileName = "mobile_stt_copy_test_" + nowForFileName() + ".txt";
+        String fileName = "mobile_stt_native_test_" + nowForFileName() + ".txt";
         intent.putExtra(Intent.EXTRA_TITLE, fileName);
 
         startActivityForResult(intent, REQ_CREATE_TXT);
@@ -233,7 +245,7 @@ public class SafeActivity extends Activity {
             } else if (requestCode == REQ_CREATE_TXT) {
                 writeTestTxt(uri);
             }
-        } catch (Exception e) {
+        } catch (Throwable e) {
             showError("선택/저장 처리 중 오류", e);
         }
     }
@@ -298,8 +310,7 @@ public class SafeActivity extends Activity {
             if (flags != 0) {
                 getContentResolver().takePersistableUriPermission(uri, flags);
             }
-        } catch (Exception ignored) {
-            // 일부 파일관리자는 영구 권한 저장을 지원하지 않을 수 있습니다.
+        } catch (Throwable ignored) {
         }
     }
 
@@ -369,21 +380,82 @@ public class SafeActivity extends Activity {
 
                     statusText.setText(
                             "파일 복사 성공!\n\n" +
-                            "다음 단계에서 이 경로를 whisper.cpp에 전달해서 STT를 수행합니다.\n\n" +
-                            "이제 '복사 결과 TXT 저장' 버튼을 눌러 테스트 결과를 저장하세요."
+                            "이제 'whisper.cpp 네이티브 연결 확인' 버튼을 눌러보세요."
                     );
 
                     Toast.makeText(this, "파일 복사 완료", Toast.LENGTH_LONG).show();
                     updateButtons();
                 });
 
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 runOnUiThread(() -> {
                     showError("파일 복사 실패", e);
                     updateButtons();
                 });
             }
         }).start();
+    }
+
+    private void runNativeCheck() {
+        try {
+            if (!ensureNativeLibraryLoaded()) {
+                lastNativeCheckResult =
+                        "네이티브 라이브러리 로드 실패\n\n" +
+                        nativeLoadError;
+
+                statusText.setText(lastNativeCheckResult);
+                Toast.makeText(this, "네이티브 로드 실패", Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            String result = nativeCheck();
+
+            if (result == null || result.trim().isEmpty()) {
+                result = "nativeCheck returned empty result";
+            }
+
+            lastNativeCheckResult = result;
+
+            statusText.setText(
+                    "네이티브 연결 확인 성공!\n\n" +
+                    result
+            );
+
+            Toast.makeText(this, "whisper.cpp 연결 확인 성공", Toast.LENGTH_LONG).show();
+
+        } catch (Throwable e) {
+            lastNativeCheckResult =
+                    e.getClass().getSimpleName() + "\n" +
+                    String.valueOf(e.getMessage());
+
+            showError("네이티브 연결 확인 실패", e);
+        }
+    }
+
+    private boolean ensureNativeLibraryLoaded() {
+        if (nativeLibraryLoaded) {
+            return true;
+        }
+
+        if (nativeLoadTried) {
+            return false;
+        }
+
+        nativeLoadTried = true;
+
+        try {
+            System.loadLibrary("mobilestt");
+            nativeLibraryLoaded = true;
+            nativeLoadError = "";
+            return true;
+        } catch (Throwable e) {
+            nativeLoadError =
+                    e.getClass().getSimpleName() + "\n" +
+                    String.valueOf(e.getMessage());
+
+            nativeLibraryLoaded = false;
+            return false;
+        }
     }
 
     private File getModelDirectory() {
@@ -482,12 +554,12 @@ public class SafeActivity extends Activity {
                     "TXT 파일 저장 성공!\n\n" +
                     "저장된 파일 URI:\n" +
                     outputUri + "\n\n" +
-                    "3단계 테스트가 완료되었습니다."
+                    "4단계 테스트가 완료되었습니다."
             );
 
             Toast.makeText(this, "TXT 저장 완료", Toast.LENGTH_LONG).show();
 
-        } catch (Exception e) {
+        } catch (Throwable e) {
             showError("TXT 파일 저장 실패", e);
         }
     }
@@ -495,11 +567,11 @@ public class SafeActivity extends Activity {
     private String buildTestText() {
         StringBuilder sb = new StringBuilder();
 
-        sb.append("Mobile STT 3단계 테스트 결과\n");
+        sb.append("Mobile STT 4단계 테스트 결과\n");
         sb.append("============================\n\n");
 
-        sb.append("현재 단계: 3단계\n");
-        sb.append("기능: WAV 파일 선택 + Whisper 모델 선택 + 내부 복사 테스트\n\n");
+        sb.append("현재 단계: 4단계\n");
+        sb.append("기능: WAV 선택 + Whisper 모델 선택 + 내부 복사 + whisper.cpp 네이티브 연결 확인\n\n");
 
         sb.append("생성 시간: ");
         sb.append(new SimpleDateFormat(
@@ -536,7 +608,10 @@ public class SafeActivity extends Activity {
         }
         sb.append("\n");
 
-        sb.append("다음 단계에서는 위 복사된 파일 경로를 whisper.cpp 네이티브 코드에 전달합니다.\n");
+        sb.append("[네이티브 연결 확인 결과]\n");
+        sb.append(lastNativeCheckResult).append("\n\n");
+
+        sb.append("다음 단계에서는 복사된 모델 파일을 실제로 whisper.cpp에서 로드합니다.\n");
 
         return sb.toString();
     }
@@ -561,7 +636,7 @@ public class SafeActivity extends Activity {
                     }
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Throwable ignored) {
         }
 
         String uriText = uri.toString();
@@ -588,7 +663,7 @@ public class SafeActivity extends Activity {
                     return cursor.getLong(sizeIndex);
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Throwable ignored) {
         }
 
         return -1L;
@@ -666,6 +741,10 @@ public class SafeActivity extends Activity {
         if (pickModelButton != null) {
             pickModelButton.setEnabled(true);
         }
+
+        if (nativeCheckButton != null) {
+            nativeCheckButton.setEnabled(true);
+        }
     }
 
     private void setButtonsEnabled(boolean enabled) {
@@ -681,12 +760,16 @@ public class SafeActivity extends Activity {
             copyButton.setEnabled(enabled);
         }
 
+        if (nativeCheckButton != null) {
+            nativeCheckButton.setEnabled(enabled);
+        }
+
         if (saveTxtButton != null) {
             saveTxtButton.setEnabled(enabled);
         }
     }
 
-    private void showError(String title, Exception e) {
+    private void showError(String title, Throwable e) {
         String message =
                 title + "\n\n" +
                 e.getClass().getSimpleName() + "\n" +
@@ -699,7 +782,7 @@ public class SafeActivity extends Activity {
         Toast.makeText(this, title, Toast.LENGTH_LONG).show();
     }
 
-    private void showFatalError(Exception e) {
+    private void showFatalError(Throwable e) {
         TextView textView = new TextView(this);
         textView.setText(
                 "앱 화면 생성 중 오류가 발생했습니다.\n\n" +
