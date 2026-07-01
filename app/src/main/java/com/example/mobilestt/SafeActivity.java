@@ -14,7 +14,10 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
@@ -25,14 +28,30 @@ import java.util.Locale;
 public class SafeActivity extends Activity {
 
     private static final int REQ_PICK_AUDIO = 1001;
-    private static final int REQ_CREATE_TXT = 1002;
+    private static final int REQ_PICK_MODEL = 1002;
+    private static final int REQ_CREATE_TXT = 1003;
 
     private TextView statusText;
     private TextView audioText;
+    private TextView modelText;
+    private TextView copyText;
+
+    private Button pickAudioButton;
+    private Button pickModelButton;
+    private Button copyButton;
     private Button saveTxtButton;
 
     private Uri selectedAudioUri;
+    private Uri selectedModelUri;
+
     private String selectedAudioName = "";
+    private String selectedModelName = "";
+
+    private long selectedAudioSize = -1L;
+    private long selectedModelSize = -1L;
+
+    private File copiedAudioFile;
+    private File copiedModelFile;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -59,10 +78,12 @@ public class SafeActivity extends Activity {
 
         statusText = new TextView(this);
         statusText.setText(
-                "2단계 테스트입니다.\n\n" +
-                "1. WAV 파일을 선택합니다.\n" +
-                "2. TXT 파일 저장을 테스트합니다.\n\n" +
-                "아직 STT 기능은 없습니다."
+                "3단계 테스트입니다.\n\n" +
+                "1. WAV 오디오 파일을 선택합니다.\n" +
+                "2. Whisper 모델 파일을 선택합니다.\n" +
+                "3. 두 파일을 앱 내부 저장소로 복사합니다.\n" +
+                "4. 복사 결과를 TXT로 저장합니다.\n\n" +
+                "아직 STT 변환은 하지 않습니다."
         );
         statusText.setTextSize(16f);
         statusText.setPadding(0, dp(20), 0, dp(16));
@@ -70,10 +91,20 @@ public class SafeActivity extends Activity {
         audioText = new TextView(this);
         audioText.setText("선택된 오디오 파일: 없음");
         audioText.setTextSize(15f);
-        audioText.setPadding(0, dp(8), 0, dp(16));
+        audioText.setPadding(0, dp(8), 0, dp(12));
 
-        Button pickAudioButton = new Button(this);
-        pickAudioButton.setText("WAV 오디오 파일 선택");
+        modelText = new TextView(this);
+        modelText.setText("선택된 Whisper 모델 파일: 없음");
+        modelText.setTextSize(15f);
+        modelText.setPadding(0, dp(8), 0, dp(12));
+
+        copyText = new TextView(this);
+        copyText.setText("복사된 파일: 없음");
+        copyText.setTextSize(15f);
+        copyText.setPadding(0, dp(8), 0, dp(16));
+
+        pickAudioButton = new Button(this);
+        pickAudioButton.setText("1. WAV 오디오 파일 선택");
         pickAudioButton.setAllCaps(false);
         pickAudioButton.setOnClickListener(v -> {
             try {
@@ -83,8 +114,25 @@ public class SafeActivity extends Activity {
             }
         });
 
+        pickModelButton = new Button(this);
+        pickModelButton.setText("2. Whisper 모델 파일 선택");
+        pickModelButton.setAllCaps(false);
+        pickModelButton.setOnClickListener(v -> {
+            try {
+                openModelPicker();
+            } catch (Exception e) {
+                showError("모델 선택 화면 열기 실패", e);
+            }
+        });
+
+        copyButton = new Button(this);
+        copyButton.setText("3. 선택한 파일 앱 내부로 복사");
+        copyButton.setAllCaps(false);
+        copyButton.setEnabled(false);
+        copyButton.setOnClickListener(v -> copySelectedFiles());
+
         saveTxtButton = new Button(this);
-        saveTxtButton.setText("테스트 TXT 파일 저장");
+        saveTxtButton.setText("4. 복사 결과 TXT 저장");
         saveTxtButton.setAllCaps(false);
         saveTxtButton.setEnabled(false);
         saveTxtButton.setOnClickListener(v -> {
@@ -95,55 +143,33 @@ public class SafeActivity extends Activity {
             }
         });
 
-        root.addView(
-                title,
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-        );
-
-        root.addView(
-                statusText,
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-        );
-
-        root.addView(
-                audioText,
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-        );
-
-        root.addView(
-                pickAudioButton,
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-        );
-
-        root.addView(
-                saveTxtButton,
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-        );
+        addView(root, title);
+        addView(root, statusText);
+        addView(root, audioText);
+        addView(root, modelText);
+        addView(root, copyText);
+        addView(root, pickAudioButton);
+        addView(root, pickModelButton);
+        addView(root, copyButton);
+        addView(root, saveTxtButton);
 
         scrollView.addView(root);
         setContentView(scrollView);
     }
 
+    private void addView(LinearLayout root, android.view.View view) {
+        root.addView(
+                view,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+        );
+    }
+
     private void openAudioPicker() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-
-        // 일부 파일관리자는 WAV를 audio/wav로, 일부는 application/octet-stream으로 표시합니다.
         intent.setType("*/*");
 
         String[] mimeTypes = new String[]{
@@ -161,12 +187,25 @@ public class SafeActivity extends Activity {
         startActivityForResult(intent, REQ_PICK_AUDIO);
     }
 
+    private void openModelPicker() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+
+        // ggml, bin, gguf 파일은 기기마다 MIME 타입이 다르게 나올 수 있어서 전체 파일로 엽니다.
+        intent.setType("*/*");
+
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+
+        startActivityForResult(intent, REQ_PICK_MODEL);
+    }
+
     private void openTxtCreator() {
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("text/plain");
 
-        String fileName = "mobile_stt_test_" + nowForFileName() + ".txt";
+        String fileName = "mobile_stt_copy_test_" + nowForFileName() + ".txt";
         intent.putExtra(Intent.EXTRA_TITLE, fileName);
 
         startActivityForResult(intent, REQ_CREATE_TXT);
@@ -189,6 +228,8 @@ public class SafeActivity extends Activity {
 
             if (requestCode == REQ_PICK_AUDIO) {
                 handlePickedAudio(uri, data);
+            } else if (requestCode == REQ_PICK_MODEL) {
+                handlePickedModel(uri, data);
             } else if (requestCode == REQ_CREATE_TXT) {
                 writeTestTxt(uri);
             }
@@ -200,30 +241,223 @@ public class SafeActivity extends Activity {
     private void handlePickedAudio(Uri uri, Intent data) {
         selectedAudioUri = uri;
         selectedAudioName = getDisplayName(uri);
+        selectedAudioSize = getFileSize(uri);
 
+        persistReadPermission(uri, data);
+
+        audioText.setText(
+                "선택된 오디오 파일:\n" +
+                selectedAudioName + "\n" +
+                "크기: " + formatBytes(selectedAudioSize) + "\n\n" +
+                "URI:\n" +
+                selectedAudioUri
+        );
+
+        copiedAudioFile = null;
+        copiedModelFile = null;
+        copyText.setText("복사된 파일: 없음");
+
+        statusText.setText(
+                "오디오 파일 선택 완료.\n\n" +
+                "이제 Whisper 모델 파일을 선택하세요."
+        );
+
+        updateButtons();
+    }
+
+    private void handlePickedModel(Uri uri, Intent data) {
+        selectedModelUri = uri;
+        selectedModelName = getDisplayName(uri);
+        selectedModelSize = getFileSize(uri);
+
+        persistReadPermission(uri, data);
+
+        modelText.setText(
+                "선택된 Whisper 모델 파일:\n" +
+                selectedModelName + "\n" +
+                "크기: " + formatBytes(selectedModelSize) + "\n\n" +
+                "URI:\n" +
+                selectedModelUri
+        );
+
+        copiedAudioFile = null;
+        copiedModelFile = null;
+        copyText.setText("복사된 파일: 없음");
+
+        statusText.setText(
+                "Whisper 모델 파일 선택 완료.\n\n" +
+                "이제 '선택한 파일 앱 내부로 복사' 버튼을 누르세요."
+        );
+
+        updateButtons();
+    }
+
+    private void persistReadPermission(Uri uri, Intent data) {
         try {
             int flags = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
             if (flags != 0) {
                 getContentResolver().takePersistableUriPermission(uri, flags);
             }
         } catch (Exception ignored) {
-            // 일부 기기에서는 영구 권한 저장이 실패할 수 있습니다.
-            // 현재 테스트에는 큰 문제가 아닙니다.
+            // 일부 파일관리자는 영구 권한 저장을 지원하지 않을 수 있습니다.
+        }
+    }
+
+    private void copySelectedFiles() {
+        if (selectedAudioUri == null || selectedModelUri == null) {
+            Toast.makeText(this, "오디오와 모델 파일을 먼저 선택하세요.", Toast.LENGTH_LONG).show();
+            return;
         }
 
-        audioText.setText(
-                "선택된 오디오 파일:\n" +
-                selectedAudioName + "\n\n" +
-                "URI:\n" +
-                selectedAudioUri
-        );
+        setButtonsEnabled(false);
 
-        statusText.setText(
-                "WAV 파일 선택이 완료되었습니다.\n\n" +
-                "이제 '테스트 TXT 파일 저장' 버튼을 눌러 저장공간에 TXT 파일을 만들어보세요."
-        );
+        copiedAudioFile = null;
+        copiedModelFile = null;
 
-        saveTxtButton.setEnabled(true);
+        final Uri audioUri = selectedAudioUri;
+        final Uri modelUri = selectedModelUri;
+        final String audioName = selectedAudioName;
+        final String modelName = selectedModelName;
+        final long audioSize = selectedAudioSize;
+        final long modelSize = selectedModelSize;
+
+        statusText.setText("파일 복사를 시작합니다...\n\n모델 파일은 크면 시간이 걸릴 수 있습니다.");
+
+        new Thread(() -> {
+            try {
+                File audioOut = new File(
+                        getCacheDir(),
+                        "input_" + nowForFileName() + "_" + sanitizeFileName(audioName, "input.wav")
+                );
+
+                copyUriToFile(
+                        audioUri,
+                        audioOut,
+                        "오디오 파일",
+                        audioSize
+                );
+
+                File modelDir = getModelDirectory();
+                if (!modelDir.exists() && !modelDir.mkdirs()) {
+                    throw new IOException("모델 저장 폴더 생성 실패: " + modelDir.getAbsolutePath());
+                }
+
+                File modelOut = new File(
+                        modelDir,
+                        sanitizeFileName(modelName, "whisper_model.bin")
+                );
+
+                copyUriToFile(
+                        modelUri,
+                        modelOut,
+                        "Whisper 모델 파일",
+                        modelSize
+                );
+
+                copiedAudioFile = audioOut;
+                copiedModelFile = modelOut;
+
+                runOnUiThread(() -> {
+                    copyText.setText(
+                            "복사된 오디오 파일:\n" +
+                            copiedAudioFile.getAbsolutePath() + "\n" +
+                            "크기: " + formatBytes(copiedAudioFile.length()) + "\n\n" +
+                            "복사된 모델 파일:\n" +
+                            copiedModelFile.getAbsolutePath() + "\n" +
+                            "크기: " + formatBytes(copiedModelFile.length())
+                    );
+
+                    statusText.setText(
+                            "파일 복사 성공!\n\n" +
+                            "다음 단계에서 이 경로를 whisper.cpp에 전달해서 STT를 수행합니다.\n\n" +
+                            "이제 '복사 결과 TXT 저장' 버튼을 눌러 테스트 결과를 저장하세요."
+                    );
+
+                    Toast.makeText(this, "파일 복사 완료", Toast.LENGTH_LONG).show();
+                    updateButtons();
+                });
+
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    showError("파일 복사 실패", e);
+                    updateButtons();
+                });
+            }
+        }).start();
+    }
+
+    private File getModelDirectory() {
+        File base = getExternalFilesDir(null);
+        if (base == null) {
+            base = getFilesDir();
+        }
+
+        return new File(base, "models");
+    }
+
+    private void copyUriToFile(
+            Uri sourceUri,
+            File outputFile,
+            String label,
+            long expectedSize
+    ) throws IOException {
+        File parent = outputFile.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("폴더 생성 실패: " + parent.getAbsolutePath());
+        }
+
+        InputStream inputStream = getContentResolver().openInputStream(sourceUri);
+        if (inputStream == null) {
+            throw new IOException(label + " 입력 스트림을 열 수 없습니다.");
+        }
+
+        try (
+                InputStream input = inputStream;
+                OutputStream output = new FileOutputStream(outputFile, false)
+        ) {
+            byte[] buffer = new byte[1024 * 1024];
+            long copied = 0L;
+            long lastUiUpdate = 0L;
+
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+                copied += read;
+
+                long now = System.currentTimeMillis();
+                if (now - lastUiUpdate > 500L) {
+                    lastUiUpdate = now;
+                    final long copiedNow = copied;
+
+                    runOnUiThread(() -> {
+                        statusText.setText(
+                                label + " 복사 중...\n\n" +
+                                "복사됨: " + formatBytes(copiedNow) + "\n" +
+                                "전체: " + formatBytes(expectedSize) + "\n" +
+                                progressText(copiedNow, expectedSize)
+                        );
+                    });
+                }
+            }
+
+            output.flush();
+        }
+
+        if (!outputFile.exists() || outputFile.length() <= 0) {
+            throw new IOException(label + " 복사 결과 파일이 비어 있습니다.");
+        }
+    }
+
+    private String progressText(long copied, long total) {
+        if (total <= 0) {
+            return "";
+        }
+
+        int percent = (int) ((copied * 100L) / total);
+        if (percent < 0) percent = 0;
+        if (percent > 100) percent = 100;
+
+        return "진행률: " + percent + "%";
     }
 
     private void writeTestTxt(Uri outputUri) {
@@ -248,7 +482,7 @@ public class SafeActivity extends Activity {
                     "TXT 파일 저장 성공!\n\n" +
                     "저장된 파일 URI:\n" +
                     outputUri + "\n\n" +
-                    "다음 단계에서 실제 STT 결과를 이 방식으로 저장하게 됩니다."
+                    "3단계 테스트가 완료되었습니다."
             );
 
             Toast.makeText(this, "TXT 저장 완료", Toast.LENGTH_LONG).show();
@@ -261,11 +495,11 @@ public class SafeActivity extends Activity {
     private String buildTestText() {
         StringBuilder sb = new StringBuilder();
 
-        sb.append("Mobile STT 테스트 결과\n");
-        sb.append("====================\n\n");
+        sb.append("Mobile STT 3단계 테스트 결과\n");
+        sb.append("============================\n\n");
 
-        sb.append("현재 단계: 2단계\n");
-        sb.append("기능: WAV 파일 선택 + TXT 저장 테스트\n\n");
+        sb.append("현재 단계: 3단계\n");
+        sb.append("기능: WAV 파일 선택 + Whisper 모델 선택 + 내부 복사 테스트\n\n");
 
         sb.append("생성 시간: ");
         sb.append(new SimpleDateFormat(
@@ -274,65 +508,119 @@ public class SafeActivity extends Activity {
         ).format(new Date()));
         sb.append("\n\n");
 
-        sb.append("선택된 오디오 파일 이름:\n");
-        sb.append(selectedAudioName == null || selectedAudioName.isEmpty()
-                ? "없음"
-                : selectedAudioName);
-        sb.append("\n\n");
+        sb.append("[선택된 오디오]\n");
+        sb.append("이름: ").append(selectedAudioName).append("\n");
+        sb.append("크기: ").append(formatBytes(selectedAudioSize)).append("\n");
+        sb.append("URI: ").append(selectedAudioUri).append("\n\n");
 
-        sb.append("선택된 오디오 URI:\n");
-        sb.append(selectedAudioUri == null ? "없음" : selectedAudioUri.toString());
-        sb.append("\n\n");
+        sb.append("[선택된 Whisper 모델]\n");
+        sb.append("이름: ").append(selectedModelName).append("\n");
+        sb.append("크기: ").append(formatBytes(selectedModelSize)).append("\n");
+        sb.append("URI: ").append(selectedModelUri).append("\n\n");
 
-        sb.append("다음 단계에서는 여기에 STT 변환 결과가 저장됩니다.\n");
+        sb.append("[복사된 오디오 파일]\n");
+        if (copiedAudioFile != null) {
+            sb.append("경로: ").append(copiedAudioFile.getAbsolutePath()).append("\n");
+            sb.append("크기: ").append(formatBytes(copiedAudioFile.length())).append("\n");
+        } else {
+            sb.append("없음\n");
+        }
+        sb.append("\n");
+
+        sb.append("[복사된 Whisper 모델 파일]\n");
+        if (copiedModelFile != null) {
+            sb.append("경로: ").append(copiedModelFile.getAbsolutePath()).append("\n");
+            sb.append("크기: ").append(formatBytes(copiedModelFile.length())).append("\n");
+        } else {
+            sb.append("없음\n");
+        }
+        sb.append("\n");
+
+        sb.append("다음 단계에서는 위 복사된 파일 경로를 whisper.cpp 네이티브 코드에 전달합니다.\n");
 
         return sb.toString();
     }
 
     private String getDisplayName(Uri uri) {
-        String result = uri.toString();
+        String result = "selected_file";
 
         try (Cursor cursor = getContentResolver().query(
                 uri,
-                new String[]{
-                        OpenableColumns.DISPLAY_NAME,
-                        OpenableColumns.SIZE
-                },
+                new String[]{OpenableColumns.DISPLAY_NAME},
                 null,
                 null,
                 null
         )) {
             if (cursor != null && cursor.moveToFirst()) {
                 int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                int sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE);
-
-                String name = "";
-                long size = -1L;
 
                 if (nameIndex >= 0) {
-                    name = cursor.getString(nameIndex);
-                }
-
-                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
-                    size = cursor.getLong(sizeIndex);
-                }
-
-                if (name != null && !name.isEmpty()) {
-                    if (size >= 0) {
-                        return name + " (" + formatBytes(size) + ")";
-                    } else {
+                    String name = cursor.getString(nameIndex);
+                    if (name != null && !name.trim().isEmpty()) {
                         return name;
                     }
                 }
             }
         } catch (Exception ignored) {
-            // 파일 이름을 못 읽으면 URI 문자열을 대신 사용합니다.
+        }
+
+        String uriText = uri.toString();
+        int slash = uriText.lastIndexOf('/');
+        if (slash >= 0 && slash + 1 < uriText.length()) {
+            result = uriText.substring(slash + 1);
         }
 
         return result;
     }
 
+    private long getFileSize(Uri uri) {
+        try (Cursor cursor = getContentResolver().query(
+                uri,
+                new String[]{OpenableColumns.SIZE},
+                null,
+                null,
+                null
+        )) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE);
+
+                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
+                    return cursor.getLong(sizeIndex);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        return -1L;
+    }
+
+    private String sanitizeFileName(String name, String fallback) {
+        if (name == null || name.trim().isEmpty()) {
+            name = fallback;
+        }
+
+        String cleaned = name
+                .replaceAll("[\\\\/:*?\"<>|]", "_")
+                .replace('\n', '_')
+                .replace('\r', '_')
+                .trim();
+
+        if (cleaned.isEmpty()) {
+            cleaned = fallback;
+        }
+
+        if (cleaned.length() > 80) {
+            cleaned = cleaned.substring(0, 80);
+        }
+
+        return cleaned;
+    }
+
     private String formatBytes(long bytes) {
+        if (bytes < 0) {
+            return "알 수 없음";
+        }
+
         if (bytes < 1024) {
             return bytes + " B";
         }
@@ -356,6 +644,46 @@ public class SafeActivity extends Activity {
                 "yyyyMMdd_HHmmss",
                 Locale.US
         ).format(new Date());
+    }
+
+    private void updateButtons() {
+        boolean hasAudio = selectedAudioUri != null;
+        boolean hasModel = selectedModelUri != null;
+        boolean copied = copiedAudioFile != null && copiedModelFile != null;
+
+        if (copyButton != null) {
+            copyButton.setEnabled(hasAudio && hasModel);
+        }
+
+        if (saveTxtButton != null) {
+            saveTxtButton.setEnabled(copied);
+        }
+
+        if (pickAudioButton != null) {
+            pickAudioButton.setEnabled(true);
+        }
+
+        if (pickModelButton != null) {
+            pickModelButton.setEnabled(true);
+        }
+    }
+
+    private void setButtonsEnabled(boolean enabled) {
+        if (pickAudioButton != null) {
+            pickAudioButton.setEnabled(enabled);
+        }
+
+        if (pickModelButton != null) {
+            pickModelButton.setEnabled(enabled);
+        }
+
+        if (copyButton != null) {
+            copyButton.setEnabled(enabled);
+        }
+
+        if (saveTxtButton != null) {
+            saveTxtButton.setEnabled(enabled);
+        }
     }
 
     private void showError(String title, Exception e) {
