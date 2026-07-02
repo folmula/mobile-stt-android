@@ -144,7 +144,7 @@ public class SafeActivity extends Activity {
         modelLoadButton = button("5. Whisper 모델 로드 확인");
         modelLoadButton.setOnClickListener(v -> runModelLoadTest());
 
-        transcribeButton = button("6. 짧은 WAV STT 변환 실행");
+        transcribeButton = button("6. 긴 WAV STT 변환 실행(무음 제거/청크)");
         transcribeButton.setOnClickListener(v -> runTranscribeTest());
 
         saveTxtButton = button("7. 결과 TXT 저장");
@@ -559,6 +559,15 @@ public class SafeActivity extends Activity {
                 });
             }
         }).start();
+    }
+
+    @SuppressWarnings("unused")
+    public void onNativeStatus(final String message) {
+        runOnUiThread(() -> {
+            if (statusText != null) {
+                statusText.setText(message);
+            }
+        });
     }
 
     private boolean ensureNativeLibraryLoaded() {
