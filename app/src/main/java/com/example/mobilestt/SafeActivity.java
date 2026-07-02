@@ -40,6 +40,7 @@ public class SafeActivity extends Activity {
     private Button pickModelButton;
     private Button copyButton;
     private Button nativeCheckButton;
+    private Button modelLoadButton;
     private Button saveTxtButton;
 
     private Uri selectedAudioUri;
@@ -57,9 +58,13 @@ public class SafeActivity extends Activity {
     private boolean nativeLoadTried = false;
     private boolean nativeLibraryLoaded = false;
     private String nativeLoadError = "";
+
     private String lastNativeCheckResult = "아직 실행하지 않음";
+    private String lastModelLoadResult = "아직 실행하지 않음";
 
     private native String nativeCheck();
+
+    private native String nativeLoadModel(String modelPath);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -86,12 +91,13 @@ public class SafeActivity extends Activity {
 
         statusText = new TextView(this);
         statusText.setText(
-                "4단계 테스트입니다.\n\n" +
+                "5단계 테스트입니다.\n\n" +
                 "1. WAV 오디오 파일을 선택합니다.\n" +
                 "2. Whisper 모델 파일을 선택합니다.\n" +
                 "3. 두 파일을 앱 내부 저장소로 복사합니다.\n" +
-                "4. whisper.cpp 네이티브 연결을 확인합니다.\n\n" +
-                "아직 실제 STT 변환은 하지 않습니다."
+                "4. whisper.cpp 네이티브 연결을 확인합니다.\n" +
+                "5. 복사된 Whisper 모델을 실제로 로드합니다.\n\n" +
+                "아직 STT 변환은 하지 않습니다."
         );
         statusText.setTextSize(16f);
         statusText.setPadding(0, dp(20), 0, dp(16));
@@ -144,8 +150,14 @@ public class SafeActivity extends Activity {
         nativeCheckButton.setAllCaps(false);
         nativeCheckButton.setOnClickListener(v -> runNativeCheck());
 
+        modelLoadButton = new Button(this);
+        modelLoadButton.setText("5. Whisper 모델 로드 확인");
+        modelLoadButton.setAllCaps(false);
+        modelLoadButton.setEnabled(false);
+        modelLoadButton.setOnClickListener(v -> runModelLoadTest());
+
         saveTxtButton = new Button(this);
-        saveTxtButton.setText("5. 복사 결과 TXT 저장");
+        saveTxtButton.setText("6. 결과 TXT 저장");
         saveTxtButton.setAllCaps(false);
         saveTxtButton.setEnabled(false);
         saveTxtButton.setOnClickListener(v -> {
@@ -165,6 +177,7 @@ public class SafeActivity extends Activity {
         addView(root, pickModelButton);
         addView(root, copyButton);
         addView(root, nativeCheckButton);
+        addView(root, modelLoadButton);
         addView(root, saveTxtButton);
 
         scrollView.addView(root);
@@ -217,7 +230,7 @@ public class SafeActivity extends Activity {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("text/plain");
 
-        String fileName = "mobile_stt_native_test_" + nowForFileName() + ".txt";
+        String fileName = "mobile_stt_model_load_test_" + nowForFileName() + ".txt";
         intent.putExtra(Intent.EXTRA_TITLE, fileName);
 
         startActivityForResult(intent, REQ_CREATE_TXT);
@@ -268,6 +281,7 @@ public class SafeActivity extends Activity {
         copiedAudioFile = null;
         copiedModelFile = null;
         copyText.setText("복사된 파일: 없음");
+        lastModelLoadResult = "아직 실행하지 않음";
 
         statusText.setText(
                 "오디오 파일 선택 완료.\n\n" +
@@ -295,6 +309,7 @@ public class SafeActivity extends Activity {
         copiedAudioFile = null;
         copiedModelFile = null;
         copyText.setText("복사된 파일: 없음");
+        lastModelLoadResult = "아직 실행하지 않음";
 
         statusText.setText(
                 "Whisper 모델 파일 선택 완료.\n\n" +
@@ -324,6 +339,7 @@ public class SafeActivity extends Activity {
 
         copiedAudioFile = null;
         copiedModelFile = null;
+        lastModelLoadResult = "아직 실행하지 않음";
 
         final Uri audioUri = selectedAudioUri;
         final Uri modelUri = selectedModelUri;
@@ -380,7 +396,8 @@ public class SafeActivity extends Activity {
 
                     statusText.setText(
                             "파일 복사 성공!\n\n" +
-                            "이제 'whisper.cpp 네이티브 연결 확인' 버튼을 눌러보세요."
+                            "이제 'Whisper 모델 로드 확인' 버튼을 눌러보세요.\n\n" +
+                            "처음에는 tiny 또는 base 모델로 테스트하는 것을 권장합니다."
                     );
 
                     Toast.makeText(this, "파일 복사 완료", Toast.LENGTH_LONG).show();
@@ -430,6 +447,67 @@ public class SafeActivity extends Activity {
 
             showError("네이티브 연결 확인 실패", e);
         }
+    }
+
+    private void runModelLoadTest() {
+        if (copiedModelFile == null || !copiedModelFile.exists()) {
+            Toast.makeText(this, "먼저 모델 파일을 앱 내부로 복사하세요.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        if (!ensureNativeLibraryLoaded()) {
+            lastModelLoadResult =
+                    "네이티브 라이브러리 로드 실패\n\n" +
+                    nativeLoadError;
+
+            statusText.setText(lastModelLoadResult);
+            Toast.makeText(this, "네이티브 로드 실패", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        final File modelFile = copiedModelFile;
+
+        setButtonsEnabled(false);
+
+        statusText.setText(
+                "Whisper 모델 로드 중...\n\n" +
+                "모델 경로:\n" +
+                modelFile.getAbsolutePath() + "\n\n" +
+                "모델이 크면 시간이 오래 걸리거나 메모리 부족으로 실패할 수 있습니다."
+        );
+
+        new Thread(() -> {
+            try {
+                String result = nativeLoadModel(modelFile.getAbsolutePath());
+
+                if (result == null || result.trim().isEmpty()) {
+                    result = "nativeLoadModel returned empty result";
+                }
+
+                final String finalResult = result;
+                lastModelLoadResult = finalResult;
+
+                runOnUiThread(() -> {
+                    statusText.setText(
+                            "Whisper 모델 로드 확인 완료!\n\n" +
+                            finalResult
+                    );
+
+                    Toast.makeText(this, "모델 로드 테스트 완료", Toast.LENGTH_LONG).show();
+                    updateButtons();
+                });
+
+            } catch (Throwable e) {
+                lastModelLoadResult =
+                        e.getClass().getSimpleName() + "\n" +
+                        String.valueOf(e.getMessage());
+
+                runOnUiThread(() -> {
+                    showError("Whisper 모델 로드 실패", e);
+                    updateButtons();
+                });
+            }
+        }).start();
     }
 
     private boolean ensureNativeLibraryLoaded() {
@@ -554,7 +632,7 @@ public class SafeActivity extends Activity {
                     "TXT 파일 저장 성공!\n\n" +
                     "저장된 파일 URI:\n" +
                     outputUri + "\n\n" +
-                    "4단계 테스트가 완료되었습니다."
+                    "5단계 테스트가 완료되었습니다."
             );
 
             Toast.makeText(this, "TXT 저장 완료", Toast.LENGTH_LONG).show();
@@ -567,11 +645,11 @@ public class SafeActivity extends Activity {
     private String buildTestText() {
         StringBuilder sb = new StringBuilder();
 
-        sb.append("Mobile STT 4단계 테스트 결과\n");
+        sb.append("Mobile STT 5단계 테스트 결과\n");
         sb.append("============================\n\n");
 
-        sb.append("현재 단계: 4단계\n");
-        sb.append("기능: WAV 선택 + Whisper 모델 선택 + 내부 복사 + whisper.cpp 네이티브 연결 확인\n\n");
+        sb.append("현재 단계: 5단계\n");
+        sb.append("기능: WAV 선택 + Whisper 모델 선택 + 내부 복사 + 네이티브 연결 + 모델 로드 확인\n\n");
 
         sb.append("생성 시간: ");
         sb.append(new SimpleDateFormat(
@@ -611,7 +689,10 @@ public class SafeActivity extends Activity {
         sb.append("[네이티브 연결 확인 결과]\n");
         sb.append(lastNativeCheckResult).append("\n\n");
 
-        sb.append("다음 단계에서는 복사된 모델 파일을 실제로 whisper.cpp에서 로드합니다.\n");
+        sb.append("[Whisper 모델 로드 확인 결과]\n");
+        sb.append(lastModelLoadResult).append("\n\n");
+
+        sb.append("다음 단계에서는 짧은 WAV 파일을 실제로 STT 변환합니다.\n");
 
         return sb.toString();
     }
@@ -730,6 +811,14 @@ public class SafeActivity extends Activity {
             copyButton.setEnabled(hasAudio && hasModel);
         }
 
+        if (nativeCheckButton != null) {
+            nativeCheckButton.setEnabled(true);
+        }
+
+        if (modelLoadButton != null) {
+            modelLoadButton.setEnabled(copied);
+        }
+
         if (saveTxtButton != null) {
             saveTxtButton.setEnabled(copied);
         }
@@ -740,10 +829,6 @@ public class SafeActivity extends Activity {
 
         if (pickModelButton != null) {
             pickModelButton.setEnabled(true);
-        }
-
-        if (nativeCheckButton != null) {
-            nativeCheckButton.setEnabled(true);
         }
     }
 
@@ -762,6 +847,10 @@ public class SafeActivity extends Activity {
 
         if (nativeCheckButton != null) {
             nativeCheckButton.setEnabled(enabled);
+        }
+
+        if (modelLoadButton != null) {
+            modelLoadButton.setEnabled(enabled);
         }
 
         if (saveTxtButton != null) {
