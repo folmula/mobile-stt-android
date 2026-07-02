@@ -7,6 +7,7 @@ import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -41,6 +42,7 @@ public class SafeActivity extends Activity {
     private Button copyButton;
     private Button nativeCheckButton;
     private Button modelLoadButton;
+    private Button transcribeButton;
     private Button saveTxtButton;
 
     private Uri selectedAudioUri;
@@ -55,16 +57,26 @@ public class SafeActivity extends Activity {
     private File copiedAudioFile;
     private File copiedModelFile;
 
+    private boolean busy = false;
+
     private boolean nativeLoadTried = false;
     private boolean nativeLibraryLoaded = false;
     private String nativeLoadError = "";
 
     private String lastNativeCheckResult = "아직 실행하지 않음";
     private String lastModelLoadResult = "아직 실행하지 않음";
+    private String lastTranscribeResult = "아직 실행하지 않음";
 
     private native String nativeCheck();
 
     private native String nativeLoadModel(String modelPath);
+
+    private native String nativeTranscribeShortWav(
+            String modelPath,
+            String wavPath,
+            String language,
+            int threads
+    );
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -91,13 +103,13 @@ public class SafeActivity extends Activity {
 
         statusText = new TextView(this);
         statusText.setText(
-                "5단계 테스트입니다.\n\n" +
-                "1. WAV 오디오 파일을 선택합니다.\n" +
+                "6단계 테스트입니다.\n\n" +
+                "1. 짧은 WAV 오디오 파일을 선택합니다.\n" +
                 "2. Whisper 모델 파일을 선택합니다.\n" +
                 "3. 두 파일을 앱 내부 저장소로 복사합니다.\n" +
-                "4. whisper.cpp 네이티브 연결을 확인합니다.\n" +
-                "5. 복사된 Whisper 모델을 실제로 로드합니다.\n\n" +
-                "아직 STT 변환은 하지 않습니다."
+                "4. 네이티브 연결과 모델 로드를 확인합니다.\n" +
+                "5. 짧은 WAV를 실제 STT 변환합니다.\n\n" +
+                "권장: 10초~60초 WAV, ggml-tiny 또는 ggml-base 모델"
         );
         statusText.setTextSize(16f);
         statusText.setPadding(0, dp(20), 0, dp(16));
@@ -117,56 +129,26 @@ public class SafeActivity extends Activity {
         copyText.setTextSize(15f);
         copyText.setPadding(0, dp(8), 0, dp(16));
 
-        pickAudioButton = new Button(this);
-        pickAudioButton.setText("1. WAV 오디오 파일 선택");
-        pickAudioButton.setAllCaps(false);
-        pickAudioButton.setOnClickListener(v -> {
-            try {
-                openAudioPicker();
-            } catch (Throwable e) {
-                showError("오디오 선택 화면 열기 실패", e);
-            }
-        });
+        pickAudioButton = button("1. WAV 오디오 파일 선택");
+        pickAudioButton.setOnClickListener(v -> openAudioPicker());
 
-        pickModelButton = new Button(this);
-        pickModelButton.setText("2. Whisper 모델 파일 선택");
-        pickModelButton.setAllCaps(false);
-        pickModelButton.setOnClickListener(v -> {
-            try {
-                openModelPicker();
-            } catch (Throwable e) {
-                showError("모델 선택 화면 열기 실패", e);
-            }
-        });
+        pickModelButton = button("2. Whisper 모델 파일 선택");
+        pickModelButton.setOnClickListener(v -> openModelPicker());
 
-        copyButton = new Button(this);
-        copyButton.setText("3. 선택한 파일 앱 내부로 복사");
-        copyButton.setAllCaps(false);
-        copyButton.setEnabled(false);
+        copyButton = button("3. 선택한 파일 앱 내부로 복사");
         copyButton.setOnClickListener(v -> copySelectedFiles());
 
-        nativeCheckButton = new Button(this);
-        nativeCheckButton.setText("4. whisper.cpp 네이티브 연결 확인");
-        nativeCheckButton.setAllCaps(false);
+        nativeCheckButton = button("4. whisper.cpp 네이티브 연결 확인");
         nativeCheckButton.setOnClickListener(v -> runNativeCheck());
 
-        modelLoadButton = new Button(this);
-        modelLoadButton.setText("5. Whisper 모델 로드 확인");
-        modelLoadButton.setAllCaps(false);
-        modelLoadButton.setEnabled(false);
+        modelLoadButton = button("5. Whisper 모델 로드 확인");
         modelLoadButton.setOnClickListener(v -> runModelLoadTest());
 
-        saveTxtButton = new Button(this);
-        saveTxtButton.setText("6. 결과 TXT 저장");
-        saveTxtButton.setAllCaps(false);
-        saveTxtButton.setEnabled(false);
-        saveTxtButton.setOnClickListener(v -> {
-            try {
-                openTxtCreator();
-            } catch (Throwable e) {
-                showError("TXT 저장 화면 열기 실패", e);
-            }
-        });
+        transcribeButton = button("6. 짧은 WAV STT 변환 실행");
+        transcribeButton.setOnClickListener(v -> runTranscribeTest());
+
+        saveTxtButton = button("7. 결과 TXT 저장");
+        saveTxtButton.setOnClickListener(v -> openTxtCreator());
 
         addView(root, title);
         addView(root, statusText);
@@ -178,13 +160,23 @@ public class SafeActivity extends Activity {
         addView(root, copyButton);
         addView(root, nativeCheckButton);
         addView(root, modelLoadButton);
+        addView(root, transcribeButton);
         addView(root, saveTxtButton);
 
         scrollView.addView(root);
         setContentView(scrollView);
+
+        updateButtons();
     }
 
-    private void addView(LinearLayout root, android.view.View view) {
+    private Button button(String text) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setAllCaps(false);
+        return b;
+    }
+
+    private void addView(LinearLayout root, View view) {
         root.addView(
                 view,
                 new LinearLayout.LayoutParams(
@@ -195,45 +187,63 @@ public class SafeActivity extends Activity {
     }
 
     private void openAudioPicker() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("*/*");
+        if (busy) return;
 
-        String[] mimeTypes = new String[]{
-                "audio/wav",
-                "audio/x-wav",
-                "audio/wave",
-                "audio/*",
-                "application/octet-stream"
-        };
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
 
-        intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            String[] mimeTypes = new String[]{
+                    "audio/wav",
+                    "audio/x-wav",
+                    "audio/wave",
+                    "audio/*",
+                    "application/octet-stream"
+            };
 
-        startActivityForResult(intent, REQ_PICK_AUDIO);
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+
+            startActivityForResult(intent, REQ_PICK_AUDIO);
+        } catch (Throwable e) {
+            showError("오디오 선택 화면 열기 실패", e);
+        }
     }
 
     private void openModelPicker() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("*/*");
+        if (busy) return;
 
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
 
-        startActivityForResult(intent, REQ_PICK_MODEL);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+
+            startActivityForResult(intent, REQ_PICK_MODEL);
+        } catch (Throwable e) {
+            showError("모델 선택 화면 열기 실패", e);
+        }
     }
 
     private void openTxtCreator() {
-        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("text/plain");
+        if (busy) return;
 
-        String fileName = "mobile_stt_model_load_test_" + nowForFileName() + ".txt";
-        intent.putExtra(Intent.EXTRA_TITLE, fileName);
+        try {
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("text/plain");
 
-        startActivityForResult(intent, REQ_CREATE_TXT);
+            String fileName = "mobile_stt_result_" + nowForFileName() + ".txt";
+            intent.putExtra(Intent.EXTRA_TITLE, fileName);
+
+            startActivityForResult(intent, REQ_CREATE_TXT);
+        } catch (Throwable e) {
+            showError("TXT 저장 화면 열기 실패", e);
+        }
     }
 
     @Override
@@ -256,7 +266,7 @@ public class SafeActivity extends Activity {
             } else if (requestCode == REQ_PICK_MODEL) {
                 handlePickedModel(uri, data);
             } else if (requestCode == REQ_CREATE_TXT) {
-                writeTestTxt(uri);
+                writeResultTxt(uri);
             }
         } catch (Throwable e) {
             showError("선택/저장 처리 중 오류", e);
@@ -267,21 +277,21 @@ public class SafeActivity extends Activity {
         selectedAudioUri = uri;
         selectedAudioName = getDisplayName(uri);
         selectedAudioSize = getFileSize(uri);
-
         persistReadPermission(uri, data);
-
-        audioText.setText(
-                "선택된 오디오 파일:\n" +
-                selectedAudioName + "\n" +
-                "크기: " + formatBytes(selectedAudioSize) + "\n\n" +
-                "URI:\n" +
-                selectedAudioUri
-        );
 
         copiedAudioFile = null;
         copiedModelFile = null;
-        copyText.setText("복사된 파일: 없음");
         lastModelLoadResult = "아직 실행하지 않음";
+        lastTranscribeResult = "아직 실행하지 않음";
+
+        audioText.setText(
+                "선택된 오디오 파일:\n" +
+                        selectedAudioName + "\n" +
+                        "크기: " + formatBytes(selectedAudioSize) + "\n\n" +
+                        "URI:\n" + selectedAudioUri
+        );
+
+        copyText.setText("복사된 파일: 없음");
 
         statusText.setText(
                 "오디오 파일 선택 완료.\n\n" +
@@ -295,25 +305,25 @@ public class SafeActivity extends Activity {
         selectedModelUri = uri;
         selectedModelName = getDisplayName(uri);
         selectedModelSize = getFileSize(uri);
-
         persistReadPermission(uri, data);
-
-        modelText.setText(
-                "선택된 Whisper 모델 파일:\n" +
-                selectedModelName + "\n" +
-                "크기: " + formatBytes(selectedModelSize) + "\n\n" +
-                "URI:\n" +
-                selectedModelUri
-        );
 
         copiedAudioFile = null;
         copiedModelFile = null;
-        copyText.setText("복사된 파일: 없음");
         lastModelLoadResult = "아직 실행하지 않음";
+        lastTranscribeResult = "아직 실행하지 않음";
+
+        modelText.setText(
+                "선택된 Whisper 모델 파일:\n" +
+                        selectedModelName + "\n" +
+                        "크기: " + formatBytes(selectedModelSize) + "\n\n" +
+                        "URI:\n" + selectedModelUri
+        );
+
+        copyText.setText("복사된 파일: 없음");
 
         statusText.setText(
                 "Whisper 모델 파일 선택 완료.\n\n" +
-                "이제 '선택한 파일 앱 내부로 복사' 버튼을 누르세요."
+                "이제 파일을 앱 내부로 복사하세요."
         );
 
         updateButtons();
@@ -335,11 +345,12 @@ public class SafeActivity extends Activity {
             return;
         }
 
-        setButtonsEnabled(false);
+        setBusy(true);
 
         copiedAudioFile = null;
         copiedModelFile = null;
         lastModelLoadResult = "아직 실행하지 않음";
+        lastTranscribeResult = "아직 실행하지 않음";
 
         final Uri audioUri = selectedAudioUri;
         final Uri modelUri = selectedModelUri;
@@ -357,12 +368,7 @@ public class SafeActivity extends Activity {
                         "input_" + nowForFileName() + "_" + sanitizeFileName(audioName, "input.wav")
                 );
 
-                copyUriToFile(
-                        audioUri,
-                        audioOut,
-                        "오디오 파일",
-                        audioSize
-                );
+                copyUriToFile(audioUri, audioOut, "오디오 파일", audioSize);
 
                 File modelDir = getModelDirectory();
                 if (!modelDir.exists() && !modelDir.mkdirs()) {
@@ -374,12 +380,7 @@ public class SafeActivity extends Activity {
                         sanitizeFileName(modelName, "whisper_model.bin")
                 );
 
-                copyUriToFile(
-                        modelUri,
-                        modelOut,
-                        "Whisper 모델 파일",
-                        modelSize
-                );
+                copyUriToFile(modelUri, modelOut, "Whisper 모델 파일", modelSize);
 
                 copiedAudioFile = audioOut;
                 copiedModelFile = modelOut;
@@ -387,46 +388,43 @@ public class SafeActivity extends Activity {
                 runOnUiThread(() -> {
                     copyText.setText(
                             "복사된 오디오 파일:\n" +
-                            copiedAudioFile.getAbsolutePath() + "\n" +
-                            "크기: " + formatBytes(copiedAudioFile.length()) + "\n\n" +
-                            "복사된 모델 파일:\n" +
-                            copiedModelFile.getAbsolutePath() + "\n" +
-                            "크기: " + formatBytes(copiedModelFile.length())
+                                    copiedAudioFile.getAbsolutePath() + "\n" +
+                                    "크기: " + formatBytes(copiedAudioFile.length()) + "\n\n" +
+                                    "복사된 모델 파일:\n" +
+                                    copiedModelFile.getAbsolutePath() + "\n" +
+                                    "크기: " + formatBytes(copiedModelFile.length())
                     );
 
                     statusText.setText(
                             "파일 복사 성공!\n\n" +
-                            "이제 'Whisper 모델 로드 확인' 버튼을 눌러보세요.\n\n" +
-                            "처음에는 tiny 또는 base 모델로 테스트하는 것을 권장합니다."
+                            "이제 네이티브 연결 확인, 모델 로드 확인, STT 변환을 순서대로 실행하세요."
                     );
 
                     Toast.makeText(this, "파일 복사 완료", Toast.LENGTH_LONG).show();
-                    updateButtons();
+                    setBusy(false);
                 });
 
             } catch (Throwable e) {
                 runOnUiThread(() -> {
                     showError("파일 복사 실패", e);
-                    updateButtons();
+                    setBusy(false);
                 });
             }
         }).start();
     }
 
     private void runNativeCheck() {
+        if (busy) return;
+
         try {
             if (!ensureNativeLibraryLoaded()) {
                 lastNativeCheckResult =
-                        "네이티브 라이브러리 로드 실패\n\n" +
-                        nativeLoadError;
-
+                        "네이티브 라이브러리 로드 실패\n\n" + nativeLoadError;
                 statusText.setText(lastNativeCheckResult);
-                Toast.makeText(this, "네이티브 로드 실패", Toast.LENGTH_LONG).show();
                 return;
             }
 
             String result = nativeCheck();
-
             if (result == null || result.trim().isEmpty()) {
                 result = "nativeCheck returned empty result";
             }
@@ -434,17 +432,13 @@ public class SafeActivity extends Activity {
             lastNativeCheckResult = result;
 
             statusText.setText(
-                    "네이티브 연결 확인 성공!\n\n" +
-                    result
+                    "네이티브 연결 확인 성공!\n\n" + result
             );
 
-            Toast.makeText(this, "whisper.cpp 연결 확인 성공", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "네이티브 연결 성공", Toast.LENGTH_LONG).show();
 
         } catch (Throwable e) {
-            lastNativeCheckResult =
-                    e.getClass().getSimpleName() + "\n" +
-                    String.valueOf(e.getMessage());
-
+            lastNativeCheckResult = e.getClass().getSimpleName() + "\n" + e.getMessage();
             showError("네이티브 연결 확인 실패", e);
         }
     }
@@ -457,29 +451,23 @@ public class SafeActivity extends Activity {
 
         if (!ensureNativeLibraryLoaded()) {
             lastModelLoadResult =
-                    "네이티브 라이브러리 로드 실패\n\n" +
-                    nativeLoadError;
-
+                    "네이티브 라이브러리 로드 실패\n\n" + nativeLoadError;
             statusText.setText(lastModelLoadResult);
-            Toast.makeText(this, "네이티브 로드 실패", Toast.LENGTH_LONG).show();
             return;
         }
 
-        final File modelFile = copiedModelFile;
+        setBusy(true);
 
-        setButtonsEnabled(false);
+        final File modelFile = copiedModelFile;
 
         statusText.setText(
                 "Whisper 모델 로드 중...\n\n" +
-                "모델 경로:\n" +
-                modelFile.getAbsolutePath() + "\n\n" +
-                "모델이 크면 시간이 오래 걸리거나 메모리 부족으로 실패할 수 있습니다."
+                        modelFile.getAbsolutePath()
         );
 
         new Thread(() -> {
             try {
                 String result = nativeLoadModel(modelFile.getAbsolutePath());
-
                 if (result == null || result.trim().isEmpty()) {
                     result = "nativeLoadModel returned empty result";
                 }
@@ -488,36 +476,94 @@ public class SafeActivity extends Activity {
                 lastModelLoadResult = finalResult;
 
                 runOnUiThread(() -> {
-                    statusText.setText(
-                            "Whisper 모델 로드 확인 완료!\n\n" +
-                            finalResult
-                    );
-
+                    statusText.setText("Whisper 모델 로드 확인 완료!\n\n" + finalResult);
                     Toast.makeText(this, "모델 로드 테스트 완료", Toast.LENGTH_LONG).show();
-                    updateButtons();
+                    setBusy(false);
                 });
 
             } catch (Throwable e) {
-                lastModelLoadResult =
-                        e.getClass().getSimpleName() + "\n" +
-                        String.valueOf(e.getMessage());
+                lastModelLoadResult = e.getClass().getSimpleName() + "\n" + e.getMessage();
 
                 runOnUiThread(() -> {
                     showError("Whisper 모델 로드 실패", e);
-                    updateButtons();
+                    setBusy(false);
+                });
+            }
+        }).start();
+    }
+
+    private void runTranscribeTest() {
+        if (copiedModelFile == null || !copiedModelFile.exists()) {
+            Toast.makeText(this, "먼저 모델 파일을 앱 내부로 복사하세요.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        if (copiedAudioFile == null || !copiedAudioFile.exists()) {
+            Toast.makeText(this, "먼저 오디오 파일을 앱 내부로 복사하세요.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        if (!ensureNativeLibraryLoaded()) {
+            lastTranscribeResult =
+                    "네이티브 라이브러리 로드 실패\n\n" + nativeLoadError;
+            statusText.setText(lastTranscribeResult);
+            return;
+        }
+
+        setBusy(true);
+
+        final String modelPath = copiedModelFile.getAbsolutePath();
+        final String wavPath = copiedAudioFile.getAbsolutePath();
+        final int threads = bestThreadCount();
+
+        statusText.setText(
+                "STT 변환 중...\n\n" +
+                        "처음 실행은 오래 걸릴 수 있습니다.\n" +
+                        "짧은 WAV와 tiny/base 모델로 테스트하세요.\n\n" +
+                        "모델:\n" + modelPath + "\n\n" +
+                        "오디오:\n" + wavPath
+        );
+
+        new Thread(() -> {
+            try {
+                String result = nativeTranscribeShortWav(
+                        modelPath,
+                        wavPath,
+                        "ko",
+                        threads
+                );
+
+                if (result == null || result.trim().isEmpty()) {
+                    result = "nativeTranscribeShortWav returned empty result";
+                }
+
+                final String finalResult = result;
+                lastTranscribeResult = finalResult;
+
+                runOnUiThread(() -> {
+                    statusText.setText(
+                            "STT 변환 완료!\n\n" +
+                                    finalResult
+                    );
+
+                    Toast.makeText(this, "STT 변환 완료", Toast.LENGTH_LONG).show();
+                    setBusy(false);
+                });
+
+            } catch (Throwable e) {
+                lastTranscribeResult = e.getClass().getSimpleName() + "\n" + e.getMessage();
+
+                runOnUiThread(() -> {
+                    showError("STT 변환 실패", e);
+                    setBusy(false);
                 });
             }
         }).start();
     }
 
     private boolean ensureNativeLibraryLoaded() {
-        if (nativeLibraryLoaded) {
-            return true;
-        }
-
-        if (nativeLoadTried) {
-            return false;
-        }
+        if (nativeLibraryLoaded) return true;
+        if (nativeLoadTried) return false;
 
         nativeLoadTried = true;
 
@@ -529,7 +575,7 @@ public class SafeActivity extends Activity {
         } catch (Throwable e) {
             nativeLoadError =
                     e.getClass().getSimpleName() + "\n" +
-                    String.valueOf(e.getMessage());
+                            String.valueOf(e.getMessage());
 
             nativeLibraryLoaded = false;
             return false;
@@ -538,9 +584,7 @@ public class SafeActivity extends Activity {
 
     private File getModelDirectory() {
         File base = getExternalFilesDir(null);
-        if (base == null) {
-            base = getFilesDir();
-        }
+        if (base == null) base = getFilesDir();
 
         return new File(base, "models");
     }
@@ -552,6 +596,7 @@ public class SafeActivity extends Activity {
             long expectedSize
     ) throws IOException {
         File parent = outputFile.getParentFile();
+
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
             throw new IOException("폴더 생성 실패: " + parent.getAbsolutePath());
         }
@@ -582,9 +627,9 @@ public class SafeActivity extends Activity {
                     runOnUiThread(() -> {
                         statusText.setText(
                                 label + " 복사 중...\n\n" +
-                                "복사됨: " + formatBytes(copiedNow) + "\n" +
-                                "전체: " + formatBytes(expectedSize) + "\n" +
-                                progressText(copiedNow, expectedSize)
+                                        "복사됨: " + formatBytes(copiedNow) + "\n" +
+                                        "전체: " + formatBytes(expectedSize) + "\n" +
+                                        progressText(copiedNow, expectedSize)
                         );
                     });
                 }
@@ -598,20 +643,8 @@ public class SafeActivity extends Activity {
         }
     }
 
-    private String progressText(long copied, long total) {
-        if (total <= 0) {
-            return "";
-        }
-
-        int percent = (int) ((copied * 100L) / total);
-        if (percent < 0) percent = 0;
-        if (percent > 100) percent = 100;
-
-        return "진행률: " + percent + "%";
-    }
-
-    private void writeTestTxt(Uri outputUri) {
-        String text = buildTestText();
+    private void writeResultTxt(Uri outputUri) {
+        String text = buildResultText();
 
         try {
             OutputStream outputStream = getContentResolver().openOutputStream(outputUri);
@@ -630,9 +663,8 @@ public class SafeActivity extends Activity {
 
             statusText.setText(
                     "TXT 파일 저장 성공!\n\n" +
-                    "저장된 파일 URI:\n" +
-                    outputUri + "\n\n" +
-                    "5단계 테스트가 완료되었습니다."
+                            "저장된 파일 URI:\n" +
+                            outputUri
             );
 
             Toast.makeText(this, "TXT 저장 완료", Toast.LENGTH_LONG).show();
@@ -642,20 +674,14 @@ public class SafeActivity extends Activity {
         }
     }
 
-    private String buildTestText() {
+    private String buildResultText() {
         StringBuilder sb = new StringBuilder();
 
-        sb.append("Mobile STT 5단계 테스트 결과\n");
+        sb.append("Mobile STT 6단계 테스트 결과\n");
         sb.append("============================\n\n");
 
-        sb.append("현재 단계: 5단계\n");
-        sb.append("기능: WAV 선택 + Whisper 모델 선택 + 내부 복사 + 네이티브 연결 + 모델 로드 확인\n\n");
-
         sb.append("생성 시간: ");
-        sb.append(new SimpleDateFormat(
-                "yyyy-MM-dd HH:mm:ss",
-                Locale.KOREA
-        ).format(new Date()));
+        sb.append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.KOREA).format(new Date()));
         sb.append("\n\n");
 
         sb.append("[선택된 오디오]\n");
@@ -670,7 +696,7 @@ public class SafeActivity extends Activity {
 
         sb.append("[복사된 오디오 파일]\n");
         if (copiedAudioFile != null) {
-            sb.append("경로: ").append(copiedAudioFile.getAbsolutePath()).append("\n");
+            sb.append(copiedAudioFile.getAbsolutePath()).append("\n");
             sb.append("크기: ").append(formatBytes(copiedAudioFile.length())).append("\n");
         } else {
             sb.append("없음\n");
@@ -679,7 +705,7 @@ public class SafeActivity extends Activity {
 
         sb.append("[복사된 Whisper 모델 파일]\n");
         if (copiedModelFile != null) {
-            sb.append("경로: ").append(copiedModelFile.getAbsolutePath()).append("\n");
+            sb.append(copiedModelFile.getAbsolutePath()).append("\n");
             sb.append("크기: ").append(formatBytes(copiedModelFile.length())).append("\n");
         } else {
             sb.append("없음\n");
@@ -692,14 +718,13 @@ public class SafeActivity extends Activity {
         sb.append("[Whisper 모델 로드 확인 결과]\n");
         sb.append(lastModelLoadResult).append("\n\n");
 
-        sb.append("다음 단계에서는 짧은 WAV 파일을 실제로 STT 변환합니다.\n");
+        sb.append("[STT 변환 결과]\n");
+        sb.append(lastTranscribeResult).append("\n\n");
 
         return sb.toString();
     }
 
     private String getDisplayName(Uri uri) {
-        String result = "selected_file";
-
         try (Cursor cursor = getContentResolver().query(
                 uri,
                 new String[]{OpenableColumns.DISPLAY_NAME},
@@ -720,13 +745,7 @@ public class SafeActivity extends Activity {
         } catch (Throwable ignored) {
         }
 
-        String uriText = uri.toString();
-        int slash = uriText.lastIndexOf('/');
-        if (slash >= 0 && slash + 1 < uriText.length()) {
-            result = uriText.substring(slash + 1);
-        }
-
-        return result;
+        return "selected_file";
     }
 
     private long getFileSize(Uri uri) {
@@ -751,9 +770,7 @@ public class SafeActivity extends Activity {
     }
 
     private String sanitizeFileName(String name, String fallback) {
-        if (name == null || name.trim().isEmpty()) {
-            name = fallback;
-        }
+        if (name == null || name.trim().isEmpty()) name = fallback;
 
         String cleaned = name
                 .replaceAll("[\\\\/:*?\"<>|]", "_")
@@ -761,45 +778,47 @@ public class SafeActivity extends Activity {
                 .replace('\r', '_')
                 .trim();
 
-        if (cleaned.isEmpty()) {
-            cleaned = fallback;
-        }
-
-        if (cleaned.length() > 80) {
-            cleaned = cleaned.substring(0, 80);
-        }
+        if (cleaned.isEmpty()) cleaned = fallback;
+        if (cleaned.length() > 80) cleaned = cleaned.substring(0, 80);
 
         return cleaned;
     }
 
     private String formatBytes(long bytes) {
-        if (bytes < 0) {
-            return "알 수 없음";
-        }
-
-        if (bytes < 1024) {
-            return bytes + " B";
-        }
+        if (bytes < 0) return "알 수 없음";
+        if (bytes < 1024) return bytes + " B";
 
         double kb = bytes / 1024.0;
-        if (kb < 1024) {
-            return String.format(Locale.US, "%.1f KB", kb);
-        }
+        if (kb < 1024) return String.format(Locale.US, "%.1f KB", kb);
 
         double mb = kb / 1024.0;
-        if (mb < 1024) {
-            return String.format(Locale.US, "%.1f MB", mb);
-        }
+        if (mb < 1024) return String.format(Locale.US, "%.1f MB", mb);
 
         double gb = mb / 1024.0;
         return String.format(Locale.US, "%.1f GB", gb);
     }
 
+    private String progressText(long copied, long total) {
+        if (total <= 0) return "";
+
+        int percent = (int) ((copied * 100L) / total);
+        percent = Math.max(0, Math.min(100, percent));
+
+        return "진행률: " + percent + "%";
+    }
+
     private String nowForFileName() {
-        return new SimpleDateFormat(
-                "yyyyMMdd_HHmmss",
-                Locale.US
-        ).format(new Date());
+        return new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+    }
+
+    private int bestThreadCount() {
+        int cores = Runtime.getRuntime().availableProcessors();
+        return Math.max(1, Math.min(4, cores - 1));
+    }
+
+    private void setBusy(boolean value) {
+        busy = value;
+        updateButtons();
     }
 
     private void updateButtons() {
@@ -807,66 +826,37 @@ public class SafeActivity extends Activity {
         boolean hasModel = selectedModelUri != null;
         boolean copied = copiedAudioFile != null && copiedModelFile != null;
 
+        if (pickAudioButton != null) pickAudioButton.setEnabled(!busy);
+        if (pickModelButton != null) pickModelButton.setEnabled(!busy);
+
         if (copyButton != null) {
-            copyButton.setEnabled(hasAudio && hasModel);
+            copyButton.setEnabled(!busy && hasAudio && hasModel);
         }
 
         if (nativeCheckButton != null) {
-            nativeCheckButton.setEnabled(true);
+            nativeCheckButton.setEnabled(!busy);
         }
 
         if (modelLoadButton != null) {
-            modelLoadButton.setEnabled(copied);
+            modelLoadButton.setEnabled(!busy && copied);
+        }
+
+        if (transcribeButton != null) {
+            transcribeButton.setEnabled(!busy && copied);
         }
 
         if (saveTxtButton != null) {
-            saveTxtButton.setEnabled(copied);
-        }
-
-        if (pickAudioButton != null) {
-            pickAudioButton.setEnabled(true);
-        }
-
-        if (pickModelButton != null) {
-            pickModelButton.setEnabled(true);
-        }
-    }
-
-    private void setButtonsEnabled(boolean enabled) {
-        if (pickAudioButton != null) {
-            pickAudioButton.setEnabled(enabled);
-        }
-
-        if (pickModelButton != null) {
-            pickModelButton.setEnabled(enabled);
-        }
-
-        if (copyButton != null) {
-            copyButton.setEnabled(enabled);
-        }
-
-        if (nativeCheckButton != null) {
-            nativeCheckButton.setEnabled(enabled);
-        }
-
-        if (modelLoadButton != null) {
-            modelLoadButton.setEnabled(enabled);
-        }
-
-        if (saveTxtButton != null) {
-            saveTxtButton.setEnabled(enabled);
+            saveTxtButton.setEnabled(!busy && copied);
         }
     }
 
     private void showError(String title, Throwable e) {
         String message =
                 title + "\n\n" +
-                e.getClass().getSimpleName() + "\n" +
-                String.valueOf(e.getMessage());
+                        e.getClass().getSimpleName() + "\n" +
+                        String.valueOf(e.getMessage());
 
-        if (statusText != null) {
-            statusText.setText(message);
-        }
+        if (statusText != null) statusText.setText(message);
 
         Toast.makeText(this, title, Toast.LENGTH_LONG).show();
     }
@@ -875,8 +865,8 @@ public class SafeActivity extends Activity {
         TextView textView = new TextView(this);
         textView.setText(
                 "앱 화면 생성 중 오류가 발생했습니다.\n\n" +
-                e.getClass().getSimpleName() + "\n" +
-                String.valueOf(e.getMessage())
+                        e.getClass().getSimpleName() + "\n" +
+                        String.valueOf(e.getMessage())
         );
         textView.setTextSize(16f);
         textView.setPadding(40, 40, 40, 40);
