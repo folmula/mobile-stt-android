@@ -31,6 +31,7 @@ public class SafeActivity extends Activity {
     private static final int REQ_PICK_AUDIO = 1001;
     private static final int REQ_PICK_MODEL = 1002;
     private static final int REQ_CREATE_TXT = 1003;
+    private static final int REQ_CREATE_PDF = 1004;
 
     private TextView statusText;
     private TextView audioText;
@@ -44,6 +45,7 @@ public class SafeActivity extends Activity {
     private Button modelLoadButton;
     private Button transcribeButton;
     private Button saveTxtButton;
+    private Button savePdfButton;
 
     private Uri selectedAudioUri;
     private Uri selectedModelUri;
@@ -150,6 +152,9 @@ public class SafeActivity extends Activity {
         saveTxtButton = button("7. 결과 TXT 저장");
         saveTxtButton.setOnClickListener(v -> openTxtCreator());
 
+        savePdfButton = button("8. 결과 PDF 저장");
+        savePdfButton.setOnClickListener(v -> openPdfCreator());
+
         addView(root, title);
         addView(root, statusText);
         addView(root, audioText);
@@ -162,6 +167,7 @@ public class SafeActivity extends Activity {
         addView(root, modelLoadButton);
         addView(root, transcribeButton);
         addView(root, saveTxtButton);
+        addView(root, savePdfButton);
 
         scrollView.addView(root);
         setContentView(scrollView);
@@ -246,6 +252,22 @@ public class SafeActivity extends Activity {
         }
     }
 
+    private void openPdfCreator() {
+    if (busy) return;
+
+    try {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/pdf");
+
+        String fileName = "mobile_stt_result_" + nowForFileName() + ".pdf";
+        intent.putExtra(Intent.EXTRA_TITLE, fileName);
+
+        startActivityForResult(intent, REQ_CREATE_PDF);
+    } catch (Throwable e) {
+        showError("PDF 저장 화면 열기 실패", e);
+    }
+
     @Override
     protected void onActivityResult(
             int requestCode,
@@ -267,7 +289,10 @@ public class SafeActivity extends Activity {
                 handlePickedModel(uri, data);
             } else if (requestCode == REQ_CREATE_TXT) {
                 writeResultTxt(uri);
+            } else if (requestCode == REQ_CREATE_PDF) {
+                writeResultPdf(uri);
             }
+
         } catch (Throwable e) {
             showError("선택/저장 처리 중 오류", e);
         }
@@ -683,6 +708,37 @@ public class SafeActivity extends Activity {
         }
     }
 
+    private void writeResultPdf(Uri outputUri) {
+        String text = buildResultText();
+
+        try {
+            OutputStream outputStream = getContentResolver().openOutputStream(outputUri);
+
+            if (outputStream == null) {
+                throw new IOException("출력 스트림을 열 수 없습니다.");
+            }
+
+            try (OutputStream out = outputStream) {
+                PdfWriterUtil.writePdf(
+                        out,
+                        "Mobile STT Result",
+                        text
+                );
+            }
+
+            statusText.setText(
+                    "PDF 파일 저장 성공!\n\n" +
+                    "저장된 파일 URI:\n" +
+                    outputUri
+            );
+
+            Toast.makeText(this, "PDF 저장 완료", Toast.LENGTH_LONG).show();
+
+        } catch (Throwable e) {
+            showError("PDF 파일 저장 실패", e);
+        }
+    }
+
     private String buildResultText() {
         StringBuilder sb = new StringBuilder();
 
@@ -857,6 +913,10 @@ public class SafeActivity extends Activity {
         if (saveTxtButton != null) {
             saveTxtButton.setEnabled(!busy && copied);
         }
+        if (savePdfButton != null) {
+            savePdfButton.setEnabled(!busy && copied);
+        }
+
     }
 
     private void showError(String title, Throwable e) {
