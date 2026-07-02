@@ -105,13 +105,14 @@ public class SafeActivity extends Activity {
 
         statusText = new TextView(this);
         statusText.setText(
-                "6단계 테스트입니다.\n\n" +
-                "1. 짧은 WAV 오디오 파일을 선택합니다.\n" +
+                "8단계 테스트입니다.\n\n" +
+                "1. WAV 오디오 파일을 선택합니다.\n" +
                 "2. Whisper 모델 파일을 선택합니다.\n" +
                 "3. 두 파일을 앱 내부 저장소로 복사합니다.\n" +
                 "4. 네이티브 연결과 모델 로드를 확인합니다.\n" +
-                "5. 짧은 WAV를 실제 STT 변환합니다.\n\n" +
-                "권장: 10초~60초 WAV, ggml-tiny 또는 ggml-base 모델"
+                "5. 긴 WAV STT 변환을 실행합니다.\n" +
+                "6. 결과를 TXT 또는 PDF로 저장합니다.\n\n" +
+                "권장: 처음에는 짧은 WAV와 ggml-tiny/base 모델로 테스트하세요."
         );
         statusText.setTextSize(16f);
         statusText.setPadding(0, dp(20), 0, dp(16));
@@ -253,19 +254,20 @@ public class SafeActivity extends Activity {
     }
 
     private void openPdfCreator() {
-    if (busy) return;
+        if (busy) return;
 
-    try {
-        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("application/pdf");
+        try {
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("application/pdf");
 
-        String fileName = "mobile_stt_result_" + nowForFileName() + ".pdf";
-        intent.putExtra(Intent.EXTRA_TITLE, fileName);
+            String fileName = "mobile_stt_result_" + nowForFileName() + ".pdf";
+            intent.putExtra(Intent.EXTRA_TITLE, fileName);
 
-        startActivityForResult(intent, REQ_CREATE_PDF);
-    } catch (Throwable e) {
-        showError("PDF 저장 화면 열기 실패", e);
+            startActivityForResult(intent, REQ_CREATE_PDF);
+        } catch (Throwable e) {
+            showError("PDF 저장 화면 열기 실패", e);
+        }
     }
 
     @Override
@@ -292,7 +294,6 @@ public class SafeActivity extends Activity {
             } else if (requestCode == REQ_CREATE_PDF) {
                 writeResultPdf(uri);
             }
-
         } catch (Throwable e) {
             showError("선택/저장 처리 중 오류", e);
         }
@@ -311,9 +312,9 @@ public class SafeActivity extends Activity {
 
         audioText.setText(
                 "선택된 오디오 파일:\n" +
-                        selectedAudioName + "\n" +
-                        "크기: " + formatBytes(selectedAudioSize) + "\n\n" +
-                        "URI:\n" + selectedAudioUri
+                selectedAudioName + "\n" +
+                "크기: " + formatBytes(selectedAudioSize) + "\n\n" +
+                "URI:\n" + selectedAudioUri
         );
 
         copyText.setText("복사된 파일: 없음");
@@ -339,9 +340,9 @@ public class SafeActivity extends Activity {
 
         modelText.setText(
                 "선택된 Whisper 모델 파일:\n" +
-                        selectedModelName + "\n" +
-                        "크기: " + formatBytes(selectedModelSize) + "\n\n" +
-                        "URI:\n" + selectedModelUri
+                selectedModelName + "\n" +
+                "크기: " + formatBytes(selectedModelSize) + "\n\n" +
+                "URI:\n" + selectedModelUri
         );
 
         copyText.setText("복사된 파일: 없음");
@@ -413,11 +414,11 @@ public class SafeActivity extends Activity {
                 runOnUiThread(() -> {
                     copyText.setText(
                             "복사된 오디오 파일:\n" +
-                                    copiedAudioFile.getAbsolutePath() + "\n" +
-                                    "크기: " + formatBytes(copiedAudioFile.length()) + "\n\n" +
-                                    "복사된 모델 파일:\n" +
-                                    copiedModelFile.getAbsolutePath() + "\n" +
-                                    "크기: " + formatBytes(copiedModelFile.length())
+                            copiedAudioFile.getAbsolutePath() + "\n" +
+                            "크기: " + formatBytes(copiedAudioFile.length()) + "\n\n" +
+                            "복사된 모델 파일:\n" +
+                            copiedModelFile.getAbsolutePath() + "\n" +
+                            "크기: " + formatBytes(copiedModelFile.length())
                     );
 
                     statusText.setText(
@@ -487,7 +488,7 @@ public class SafeActivity extends Activity {
 
         statusText.setText(
                 "Whisper 모델 로드 중...\n\n" +
-                        modelFile.getAbsolutePath()
+                modelFile.getAbsolutePath()
         );
 
         new Thread(() -> {
@@ -543,10 +544,10 @@ public class SafeActivity extends Activity {
 
         statusText.setText(
                 "STT 변환 중...\n\n" +
-                        "처음 실행은 오래 걸릴 수 있습니다.\n" +
-                        "짧은 WAV와 tiny/base 모델로 테스트하세요.\n\n" +
-                        "모델:\n" + modelPath + "\n\n" +
-                        "오디오:\n" + wavPath
+                "긴 파일은 시간이 오래 걸릴 수 있습니다.\n" +
+                "화면에 진행률이 표시됩니다.\n\n" +
+                "모델:\n" + modelPath + "\n\n" +
+                "오디오:\n" + wavPath
         );
 
         new Thread(() -> {
@@ -568,7 +569,7 @@ public class SafeActivity extends Activity {
                 runOnUiThread(() -> {
                     statusText.setText(
                             "STT 변환 완료!\n\n" +
-                                    finalResult
+                            finalResult
                     );
 
                     Toast.makeText(this, "STT 변환 완료", Toast.LENGTH_LONG).show();
@@ -609,7 +610,7 @@ public class SafeActivity extends Activity {
         } catch (Throwable e) {
             nativeLoadError =
                     e.getClass().getSimpleName() + "\n" +
-                            String.valueOf(e.getMessage());
+                    String.valueOf(e.getMessage());
 
             nativeLibraryLoaded = false;
             return false;
@@ -661,9 +662,9 @@ public class SafeActivity extends Activity {
                     runOnUiThread(() -> {
                         statusText.setText(
                                 label + " 복사 중...\n\n" +
-                                        "복사됨: " + formatBytes(copiedNow) + "\n" +
-                                        "전체: " + formatBytes(expectedSize) + "\n" +
-                                        progressText(copiedNow, expectedSize)
+                                "복사됨: " + formatBytes(copiedNow) + "\n" +
+                                "전체: " + formatBytes(expectedSize) + "\n" +
+                                progressText(copiedNow, expectedSize)
                         );
                     });
                 }
@@ -697,8 +698,8 @@ public class SafeActivity extends Activity {
 
             statusText.setText(
                     "TXT 파일 저장 성공!\n\n" +
-                            "저장된 파일 URI:\n" +
-                            outputUri
+                    "저장된 파일 URI:\n" +
+                    outputUri
             );
 
             Toast.makeText(this, "TXT 저장 완료", Toast.LENGTH_LONG).show();
@@ -742,7 +743,7 @@ public class SafeActivity extends Activity {
     private String buildResultText() {
         StringBuilder sb = new StringBuilder();
 
-        sb.append("Mobile STT 6단계 테스트 결과\n");
+        sb.append("Mobile STT 테스트 결과\n");
         sb.append("============================\n\n");
 
         sb.append("생성 시간: ");
@@ -913,17 +914,17 @@ public class SafeActivity extends Activity {
         if (saveTxtButton != null) {
             saveTxtButton.setEnabled(!busy && copied);
         }
+
         if (savePdfButton != null) {
             savePdfButton.setEnabled(!busy && copied);
         }
-
     }
 
     private void showError(String title, Throwable e) {
         String message =
                 title + "\n\n" +
-                        e.getClass().getSimpleName() + "\n" +
-                        String.valueOf(e.getMessage());
+                e.getClass().getSimpleName() + "\n" +
+                String.valueOf(e.getMessage());
 
         if (statusText != null) statusText.setText(message);
 
@@ -934,8 +935,8 @@ public class SafeActivity extends Activity {
         TextView textView = new TextView(this);
         textView.setText(
                 "앱 화면 생성 중 오류가 발생했습니다.\n\n" +
-                        e.getClass().getSimpleName() + "\n" +
-                        String.valueOf(e.getMessage())
+                e.getClass().getSimpleName() + "\n" +
+                String.valueOf(e.getMessage())
         );
         textView.setTextSize(16f);
         textView.setPadding(40, 40, 40, 40);
